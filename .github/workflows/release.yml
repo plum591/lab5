@@ -1,0 +1,120 @@
+name: C++ CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      new_tag: ${{ steps.bump_version.outputs.new_tag }}
+      commit_count: ${{ steps.bump_version.outputs.commit_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get commit count and tag
+        id: bump_version
+        run: |
+          commit_count=$(git rev-list --count HEAD)
+          new_tag="v1.0.$commit_count"
+          echo "commit_count=$commit_count" >> "$GITHUB_OUTPUT"
+          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    runs-on: ubuntu-24.04
+    needs: bump-version
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsfml-dev dpkg-dev
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DPATCH_VERSION=${{ needs.bump-version.outputs.commit_count }}
+
+      - name: Build project
+        run: cmake --build build --parallel
+
+      - name: Create DEB package
+        working-directory: build
+        run: cpack -G DEB
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package-${{ needs.bump-version.outputs.new_tag }}
+          path: build/*.deb
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    needs: bump-version
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build -A x64
+          -DCMAKE_DISABLE_FIND_PACKAGE_SFML=ON
+          -DPATCH_VERSION=${{ needs.bump-version.outputs.commit_count }}
+
+      - name: Build project
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Create Windows package
+        shell: pwsh
+        run: |
+          cmake --install build --config ${{ env.BUILD_TYPE }} --prefix build/package --component PhysicsRuntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path build/package/* -DestinationPath "build/physics-${{ needs.bump-version.outputs.new_tag }}-windows.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package-${{ needs.bump-version.outputs.new_tag }}
+          path: build/*.zip
+          if-no-files-found: error
+
+  create-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [bump-version, build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump-version.outputs.new_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Release ${{ needs.bump-version.outputs.new_tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/linux-package-${{ needs.bump-version.outputs.new_tag }}/*.deb
+            artifacts/windows-package-${{ needs.bump-version.outputs.new_tag }}/*.zip
