@@ -2,6 +2,7 @@
 #include "Ball.hpp"
 #include "Physics.h"
 #include <vector>
+// Добавили прямое подключение заголовка для std::string.
 #include <string>
 
 class Painter;
@@ -13,16 +14,15 @@ class World {
     void update(double time);
 
   private:
-    // Границы мира заданы углами прямоугольника
     Point topLeft;
     Point bottomRight;
-    // Объект физического движка
     Physics physics;
-    // Контейнер с шарами
+
+    // Было: World хранил только вектор шаров balls.
+    // Стало: временные частицы хранятся отдельно, в dust.
     std::vector<Ball> balls;
     std::vector<Dust> dust;
-    
-    // Длина отрезка времени, который не был
-    // учтен при прошлой симуляции. См. реализацию update
+
+    // Остаток времени, которого пока не хватило на целый тик.
     double restTime = 0.;
 };
